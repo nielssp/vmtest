@@ -6,6 +6,7 @@
 typedef struct bucket Bucket;
 struct bucket {
   HashMapEntry entry;
+  size_t hash;
   char defined;
   char deleted;
 };
@@ -83,13 +84,22 @@ static void hash_map_resize(HashMap *map, size_t new_capacity) {
   map->upper_cap = map->capacity * 3 / 4;
   map->lower_cap = map->capacity / 4;
   printf("resizing %zd -> %zd (low: %zd, high: %zd)\n", old_capacity, map->capacity, map->lower_cap, map->upper_cap);
-  map->size = 0;
   map->buckets = calloc(map->capacity, sizeof(Bucket));
   for (int i = 0; i < old_capacity; i++) {
     if (old_buckets[i].defined && !old_buckets[i].deleted) {
-      hash_map_add_generic(map, old_buckets[i].entry.key, old_buckets[i].entry.value);
+      size_t hash_code = old_buckets[i].hash;
+      size_t hash = hash_code & map->mask;
+      Bucket *bucket = map->buckets + hash;
+      while (bucket->defined) {
+        hash = (hash + 1) & map->mask;
+        bucket = map->buckets + hash;
+      }
+      bucket->hash = hash_code;
+      bucket->defined = 1;
+      bucket->entry = old_buckets[i].entry;
     }
   }
+  free(old_buckets);
 }
 
 int hash_map_add_generic(HashMap *map, void *key, void *value) {
@@ -106,6 +116,7 @@ int hash_map_add_generic(HashMap *map, void *key, void *value) {
     hash = (hash + 1) & map->mask;
     bucket = map->buckets + hash;
   }
+  bucket->hash = hash_code;
   bucket->defined = 1;
   bucket->deleted = 0;
   bucket->entry.key = key;
@@ -119,13 +130,14 @@ HashMapEntry hash_map_remove_generic_entry(HashMap *map, const void *key) {
   size_t hash = hash_code & map->mask;
   Bucket *bucket = map->buckets + hash;
   while (bucket->defined) {
-    if (!bucket->deleted && map->equals_func(bucket->entry.key, key)) {
+    if (!bucket->deleted && hash_code == bucket->hash && map->equals_func(bucket->entry.key, key)) {
+      HashMapEntry entry = bucket->entry;
       bucket->deleted = 1;
       map->size--;
       if (map->size < map->lower_cap && map->capacity > 8) {
         hash_map_resize(map, map->capacity >> 1);
       }
-      return bucket->entry;
+      return entry;
     }
     hash = (hash + 1) & map->mask;
     bucket = map->buckets + hash;
@@ -138,7 +150,7 @@ HashMapEntry hash_map_lookup_generic_entry(HashMap *map, const void *key) {
   size_t hash = hash_code & map->mask;
   Bucket *bucket = map->buckets + hash;
   while (bucket->defined) {
-    if (!bucket->deleted && map->equals_func(bucket->entry.key, key)) {
+    if (!bucket->deleted && hash_code == bucket->hash && map->equals_func(bucket->entry.key, key)) {
       return bucket->entry;
     }
     hash = (hash + 1) & map->mask;
