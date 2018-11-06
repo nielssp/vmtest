@@ -4,6 +4,7 @@
 #include <inttypes.h>
 
 #include "ins.h"
+#include "hashmap.h"
 
 #define DEBUG 1
 
