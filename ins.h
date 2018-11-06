@@ -34,6 +34,7 @@
 
 #define INS_PSHN 30
 #define INS_PSHA 31
+#define INS_PSHS 35
 #define INS_LODV 32
 #define INS_STOV 33
 #define INS_OPVA 34

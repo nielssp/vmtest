@@ -22,6 +22,7 @@
     case INS_NOOP: goto ins_noop;\
     case INS_EXIT: goto ins_exit;\
     case INS_PSHN: goto ins_pshn;\
+    case INS_PSHS: goto ins_pshs;\
     case INS_PSH1: goto ins_psh1;\
     case INS_PSH2: goto ins_psh2;\
     case INS_PSH4: goto ins_psh4;\
@@ -247,6 +248,7 @@ opr_mod_ ## label_suffix:\
 typedef struct val Val;
 typedef struct cons Cons;
 typedef struct array Array;
+typedef struct symbol Symbol;
 
 typedef enum {
   TYPE_U8,
@@ -266,7 +268,8 @@ typedef enum {
   TYPE_UNDEFINED,
   TYPE_NIL,
   TYPE_CONS,
-  TYPE_ARRAY
+  TYPE_ARRAY,
+  TYPE_SYMBOL
 } ValType;
 
 struct val {
@@ -274,6 +277,7 @@ struct val {
   union {
     Cons *cons;
     Array *array;
+    Symbol *symbol;
   };
 };
 
@@ -289,6 +293,12 @@ struct array {
   uint64_t length;
   CellType cell_type;
   uint8_t data[];
+};
+
+struct symbol {
+  uint64_t refs;
+  uint64_t length;
+  char symbol[];
 };
 
 struct process {
@@ -330,6 +340,10 @@ void dump_stack() {
 void delete_array(Array *array);
 void delete_cons(Cons *cons);
 
+DEFINE_PRIVATE_HASH_MAP(sym_map, SymMap, char *, Symbol *, string_hash, string_equals);
+
+SymMap symbols = (SymMap){ .map = NULL };
+
 Val create_string(const char *str) {
   uint64_t length = strlen(str);
   Array *array = malloc(sizeof(Array) + length + 1);
@@ -341,11 +355,29 @@ Val create_string(const char *str) {
 }
 
 Val create_array(uint64_t length) {
-  Array *array = calloc(sizeof(Array) + sizeof(Val *) * length, 1);
+  Array *array = calloc(sizeof(Array) + sizeof(Val) * length, 1);
   array->refs = 1;
   array->length = length;
   array->cell_type = TYPE_VAL;
   return (Val){ .type = TYPE_ARRAY, .array = array };
+}
+
+Val create_symbol(const char *str) {
+  if (!symbols.map) {
+    symbols = create_sym_map();
+  }
+  Symbol *sym = sym_map_lookup(symbols, str);
+  if (sym) {
+    sym->refs++;
+    return (Val){ .type = TYPE_SYMBOL, .symbol = sym };
+  }
+  size_t length = strlen(str);
+  Symbol *symbol = malloc(sizeof(Symbol) + length + 1);
+  symbol->refs = 2;
+  symbol->length = length;
+  strcpy(symbol->symbol, str);
+  sym_map_add(symbols, symbol->symbol, symbol);
+  return (Val){ .type = TYPE_SYMBOL, .symbol = symbol };
 }
 
 void copy_val(Val val) {
@@ -355,6 +387,9 @@ void copy_val(Val val) {
       break;
     case TYPE_CONS:
       val.cons->refs++;
+      break;
+    case TYPE_SYMBOL:
+      val.symbol->refs++;
       break;
   }
 }
@@ -368,6 +403,10 @@ void delete_val(Val val) {
     case TYPE_CONS:
       val.cons->refs--;
       if (val.cons->refs < 1) delete_cons(val.cons);
+      break;
+    case TYPE_SYMBOL:
+      val.symbol->refs--;
+      if (val.symbol->refs < 1) free(val.symbol);
       break;
   }
 }
@@ -432,8 +471,9 @@ int main(int argc, char *argv[]) {
   strcat(command, argv[1]);
   Val args = create_array(argc - 1);
   ((Val *)args.array->data)[0] = create_string(command);
+  free(command);
   for (int i = 1; i < args.array->length; i++) {
-    ((Val *)args.array->data)[0] = create_string(argv[i + 1]);
+    ((Val *)args.array->data)[i] = create_string(argv[i + 1]);
   }
   *(vs++) = args;
 
@@ -444,6 +484,12 @@ ins_exit:
 ins_pshn:
   DBGPRINT("push: NIL to %ld\n", vs - val_stack);
   (vs++)->type = TYPE_NIL;
+  EXECUTE_INS(*(pc++));
+ins_pshs:
+  *vs = create_symbol((char *)pc);
+  DBGPRINT("push: %s to %ld\n", vs->symbol->symbol, vs - val_stack);
+  pc += vs->symbol->length + 1;
+  vs++;
   EXECUTE_INS(*(pc++));
 ins_psh1: PUSH_INSTRUCTION(uint8_t);
 ins_psh2: PUSH_INSTRUCTION(uint16_t);

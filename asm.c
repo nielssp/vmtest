@@ -313,6 +313,16 @@ int main(int argc, char *argv[]) {
       emit_ins(INS_EXIT, out, &prog_p);
     } else if (strcmp(token, "push_nil") == 0) {
       emit_ins(INS_PSHN, out, &prog_p);
+    } else if (strcmp(token, "push_sym") == 0) {
+      emit_ins(INS_PSHS, out, &prog_p);
+      char *arg = read_token(in);
+      for (char *c = arg; *c; c++) {
+        fputc(*c, out);
+        prog_p += 1;
+      }
+      fputc(0, out);
+      prog_p += 1;
+      free(arg);
     } else if (strcmp(token, "push_i8") == 0 || strcmp(token, "push_u8") == 0) {
       char *arg = read_token(in);
       emit_ins1(INS_PSH1, read_int1(arg), out, &prog_p);
