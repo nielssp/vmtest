@@ -6,7 +6,7 @@
 #include "ins.h"
 #include "hashmap.h"
 
-#define DEBUG 1
+#define DEBUG 0
 
 #if DEBUG
 #define DBGPRINT(...) printf(__VA_ARGS__)

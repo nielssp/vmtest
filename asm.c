@@ -22,7 +22,14 @@ struct label {
 
 void skip_ws(FILE *f) {
   int c = fgetc(f);
-  while (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+  while (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ';') {
+    if (c == ';') {
+      c = fgetc(f);
+      while (c != '\n' && c != EOF) {
+        c = fgetc(f);
+      }
+      continue;
+    }
     c = fgetc(f);
   }
   ungetc(c, f);
