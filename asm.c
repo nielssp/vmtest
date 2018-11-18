@@ -124,6 +124,13 @@ void emit_ins1(char ins, uint8_t arg, FILE *out, size_t *prog_p) {
   *prog_p += 2;
 }
 
+void emit_ins1_1(char ins, uint8_t arg_a, uint8_t arg_b, FILE *out, size_t *prog_p) {
+  fputc(ins, out);
+  fputc(arg_a, out);
+  fputc(arg_b, out);
+  *prog_p += 3;
+}
+
 void emit_ins2(char ins, uint16_t arg, FILE *out, size_t *prog_p) {
   fputc(ins, out);
 #if BIG_ENDIAN
@@ -285,7 +292,7 @@ void read_operator(uint8_t instruction, FILE *in, FILE *out, size_t *prog_p) {
 
 int main(int argc, char *argv[]) {
   if (argc < 3) {
-    printf("usage: %s IN OUT\n");
+    printf("usage: %s IN OUT\n", argv[0]);
     return 1;
   }
   FILE *in = fopen(argv[1], "r");
@@ -357,6 +364,9 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(token, "lod8") == 0) {
       char *arg = read_token(in);
       emit_ins2(INS_LOD8, read_int2(arg), out, &prog_p);
+    } else if (strcmp(token, "lodv") == 0) {
+      char *arg = read_token(in);
+      emit_ins2(INS_LODV, read_int2(arg), out, &prog_p);
     } else if (strcmp(token, "sto1") == 0) {
       char *arg = read_token(in);
       emit_ins2(INS_STO1, read_int2(arg), out, &prog_p);
@@ -369,6 +379,9 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(token, "sto8") == 0) {
       char *arg = read_token(in);
       emit_ins2(INS_STO8, read_int2(arg), out, &prog_p);
+    } else if (strcmp(token, "stov") == 0) {
+      char *arg = read_token(in);
+      emit_ins2(INS_STOV, read_int2(arg), out, &prog_p);
     } else if (strcmp(token, "op_i8") == 0) {
       read_operator(INS_OPI1, in, out, &prog_p);
     } else if (strcmp(token, "op_i16") == 0) {
@@ -400,11 +413,16 @@ int main(int argc, char *argv[]) {
       size_t addr = get_or_add_label(&labels, arg, prog_p + 1);
       emit_ins4(INS_JMPC, addr, out, &prog_p);
     } else if (strcmp(token, "call") == 0) {
-      emit_ins(INS_CALL, out, &prog_p);
-    } else if (strcmp(token, "cret") == 0) {
+      uint8_t psize = atoi(read_token(in));
+      skip_ws(in);
+      uint8_t rsize = atoi(read_token(in));
+      emit_ins1_1(INS_CALL, psize, rsize, out, &prog_p);
+    } else if (strcmp(token, "retp") == 0) {
       char *arg = read_token(in);
-      int32_t i = atoi(arg);
-      emit_ins4(INS_CRET, *((uint32_t *)&i), out, &prog_p);
+      uint8_t size = atoi(arg);
+      emit_ins1(INS_RETP, size, out, &prog_p);
+    } else if (strcmp(token, "retr") == 0) {
+      emit_ins(INS_RETR, out, &prog_p);
     }
     skip_ws(in);
   }

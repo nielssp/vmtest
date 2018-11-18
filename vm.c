@@ -10,8 +10,10 @@
 
 #if DEBUG
 #define DBGPRINT(...) printf(__VA_ARGS__)
+#define DBGPRINT_REF(ref) print_ref(ref)
 #else
 #define DBGPRINT(...)
+#define DBGPRINT_REF(ref)
 #endif
 
 #define Address uint32_t
@@ -31,10 +33,12 @@
     case INS_LOD2: goto ins_lod2;\
     case INS_LOD4: goto ins_lod4;\
     case INS_LOD8: goto ins_lod8;\
+    case INS_LODV: goto ins_lodv;\
     case INS_STO1: goto ins_sto1;\
     case INS_STO2: goto ins_sto2;\
     case INS_STO4: goto ins_sto4;\
     case INS_STO8: goto ins_sto8;\
+    case INS_STOV: goto ins_stov;\
     case INS_OPI1: goto ins_opi1;\
     case INS_OPI2: goto ins_opi2;\
     case INS_OPI4: goto ins_opi4;\
@@ -49,7 +53,8 @@
     case INS_JUMP: goto ins_jump;\
     case INS_JMPC: goto ins_jmpc;\
     case INS_CALL: goto ins_call;\
-    case INS_CRET: goto ins_cret;\
+    case INS_RETP: goto ins_retp;\
+    case INS_RETR: goto ins_retr;\
     case INS_SYSC: goto ins_sysc;\
     case INS_OPVA: goto ins_opva;\
   }
@@ -126,6 +131,7 @@
 
 #define CAST_OPERATOR(type, from_type) \
   sp -= sizeof(from_type);\
+  DBGPRINT("cast: %lf to %lf\n", (double)*((from_type *)sp), (double)(type)*((from_type *)sp));\
   *((type *)sp) = (type)*((from_type *)sp);\
   sp += sizeof(type);\
   EXECUTE_INS(*(pc++));
@@ -245,7 +251,7 @@ opr_mod_ ## label_suffix:\
   printf("invalid float operation");\
   return 1;
 
-typedef struct val Val;
+typedef struct ref Ref;
 typedef struct cons Cons;
 typedef struct array Array;
 typedef struct symbol Symbol;
@@ -261,7 +267,7 @@ typedef enum {
   TYPE_I64,
   TYPE_F32,
   TYPE_F64,
-  TYPE_VAL
+  TYPE_REF
 } CellType;
 
 typedef enum {
@@ -270,10 +276,10 @@ typedef enum {
   TYPE_CONS,
   TYPE_ARRAY,
   TYPE_SYMBOL
-} ValType;
+} RefType;
 
-struct val {
-  ValType type;
+struct ref {
+  RefType type;
   union {
     Cons *cons;
     Array *array;
@@ -312,13 +318,13 @@ struct symbol {
 struct process {
   size_t p_size;
   uint8_t *p_stack;
-  size_t v_size;
-  Val *v_stack;
+  size_t r_size;
+  Ref *r_stack;
   char *pc;
   uint8_t *ps;
   uint8_t *pb;
-  uint8_t *vs;
-  uint8_t *vb;
+  uint8_t *rs;
+  uint8_t *rb;
 };
 
 size_t code_size;
@@ -326,17 +332,23 @@ char *code = NULL;
 
 size_t stack_size = 1024;
 uint8_t *stack = NULL;
-Val *val_stack = NULL;
+Ref *ref_stack = NULL;
 
-Val temp = { .type = TYPE_UNDEFINED };
+Ref temp = { .type = TYPE_UNDEFINED };
 
 char *pc = NULL; /* program counter */
 uint8_t *sp = NULL; /* stack pointer */
 uint8_t *bp = NULL; /* base pointer */
-Val *vs = NULL; /* value stack pointer */
-Val *vb = NULL; /* value base pointer */
+Ref *vs = NULL; /* reference stack pointer */
+Ref *vb = NULL; /* reference base pointer */
 int16_t ar = 0; /* arg */
 Address ad = 0; /* addr */
+uint8_t pas = 0; /* prim arg size */
+uint8_t ras = 0; /* ref arg size */
+
+
+uint8_t *temp_bp = NULL;
+Ref *temp_vb = NULL;
 
 void dump_stack() {
   return;
@@ -352,29 +364,29 @@ DEFINE_PRIVATE_HASH_MAP(sym_map, SymMap, char *, Symbol *, string_hash, string_e
 
 SymMap symbols;
 
-Val create_string(const char *str) {
+Ref create_string(const char *str) {
   uint64_t length = strlen(str);
   Array *array = malloc(sizeof(Array) + length + 1);
   array->refs = 1;
   array->length = length;
   array->cell_type = TYPE_U8;
   strcpy((char *)array->data, str);
-  return (Val){ .type = TYPE_ARRAY, .array = array };
+  return (Ref){ .type = TYPE_ARRAY, .array = array };
 }
 
-Val create_array(uint64_t length) {
-  Array *array = calloc(sizeof(Array) + sizeof(Val) * length, 1);
+Ref create_array(uint64_t length) {
+  Array *array = calloc(sizeof(Array) + sizeof(Ref) * length, 1);
   array->refs = 1;
   array->length = length;
-  array->cell_type = TYPE_VAL;
-  return (Val){ .type = TYPE_ARRAY, .array = array };
+  array->cell_type = TYPE_REF;
+  return (Ref){ .type = TYPE_ARRAY, .array = array };
 }
 
-Val create_symbol(const char *str) {
+Ref create_symbol(const char *str) {
   Symbol *sym = sym_map_lookup(symbols, str);
   if (sym) {
     sym->refs++;
-    return (Val){ .type = TYPE_SYMBOL, .symbol = sym };
+    return (Ref){ .type = TYPE_SYMBOL, .symbol = sym };
   }
   size_t length = strlen(str);
   Symbol *symbol = malloc(sizeof(Symbol) + length + 1);
@@ -382,38 +394,131 @@ Val create_symbol(const char *str) {
   symbol->length = length;
   strcpy(symbol->symbol, str);
   sym_map_add(symbols, symbol->symbol, symbol);
-  return (Val){ .type = TYPE_SYMBOL, .symbol = symbol };
+  return (Ref){ .type = TYPE_SYMBOL, .symbol = symbol };
 }
 
-void copy_val(Val val) {
-  switch (val.type) {
+void copy_ref(Ref ref) {
+  switch (ref.type) {
     case TYPE_ARRAY:
-      val.array->refs++;
+      ref.array->refs++;
       break;
     case TYPE_CONS:
-      val.cons->refs++;
+      ref.cons->refs++;
       break;
     case TYPE_SYMBOL:
-      val.symbol->refs++;
+      ref.symbol->refs++;
       break;
     default:
       break;
   }
 }
 
-void delete_val(Val val) {
-  switch (val.type) {
+void print_ref(Ref ref);
+
+void print_cell(CellType cell_type, uint8_t *data, uint64_t index) {
+  switch (cell_type) {
+    case TYPE_U8:
+      printf("%d", ((uint8_t *)data)[index]);
+      break;
+    case TYPE_U16:
+      printf("%d", ((uint16_t *)data)[index]);
+      break;
+    case TYPE_U32:
+      printf("%d", ((uint32_t *)data)[index]);
+      break;
+    case TYPE_U64:
+      printf("%ld", ((uint64_t *)data)[index]);
+      break;
+    case TYPE_I8:
+      printf("%d", ((int8_t *)data)[index]);
+      break;
+    case TYPE_I16:
+      printf("%d", ((int16_t *)data)[index]);
+      break;
+    case TYPE_I32:
+      printf("%d", ((int32_t *)data)[index]);
+      break;
+    case TYPE_I64:
+      printf("%ld", ((int64_t *)data)[index]);
+      break;
+    case TYPE_F32:
+      printf("%f", ((float *)data)[index]);
+      break;
+    case TYPE_F64:
+      printf("%f", ((double *)data)[index]);
+      break;
+    case TYPE_REF:
+      print_ref(((Ref *)data)[index]);
+      break;
+  }
+}
+
+void print_array(Array *array) {
+  printf("[");
+    for (uint64_t i = 0; i < array->length; i++) {
+      if (i) {
+        printf(" ");
+      }
+      print_cell(array->cell_type, array->data, i);
+    }
+  printf("]");
+}
+
+void print_cons(Cons *cons) {
+  Cons *tail = cons->tail;
+  printf("(");
+  print_cell(cons->cell_type, cons->head, 0);
+  while (tail) {
+    tail->refs--;
+    if (tail->refs > 0) {
+      return;
+    }
+    cons = tail;
+    tail = tail->tail;
+    print_cell(cons->cell_type, cons->head, 0);
+  }
+  printf(")");
+}
+
+void print_symbol(Symbol *symbol) {
+  printf("%s", symbol->symbol);
+}
+
+void print_ref(Ref ref) {
+  switch (ref.type) {
+    case TYPE_UNDEFINED:
+      printf("undefined");
+      break;
+    case TYPE_NIL:
+      printf("()");
+      break;
     case TYPE_ARRAY:
-      val.array->refs--;
-      if (val.array->refs < 1) delete_array(val.array);
+      print_array(ref.array);
       break;
     case TYPE_CONS:
-      val.cons->refs--;
-      if (val.cons->refs < 1) delete_cons(val.cons);
+      print_cons(ref.cons);
       break;
     case TYPE_SYMBOL:
-      val.symbol->refs--;
-      if (val.symbol->refs < 1) free(val.symbol);
+      print_symbol(ref.symbol);
+      break;
+    default:
+      break;
+  }
+}
+
+void delete_ref(Ref ref) {
+  switch (ref.type) {
+    case TYPE_ARRAY:
+      ref.array->refs--;
+      if (ref.array->refs < 1) delete_array(ref.array);
+      break;
+    case TYPE_CONS:
+      ref.cons->refs--;
+      if (ref.cons->refs < 1) delete_cons(ref.cons);
+      break;
+    case TYPE_SYMBOL:
+      ref.symbol->refs--;
+      if (ref.symbol->refs < 1) free(ref.symbol);
       break;
     default:
       break;
@@ -422,9 +527,9 @@ void delete_val(Val val) {
 
 void delete_array(Array *array) {
   DBGPRINT("delete array %p\n", (void *)array);
-  if (array->cell_type == TYPE_VAL) {
+  if (array->cell_type == TYPE_REF) {
     for (uint64_t i = 0; i < array->length; i++) {
-      delete_val(((Val *)array->data)[i]);
+      delete_ref(((Ref *)array->data)[i]);
     }
   }
   free(array);
@@ -433,7 +538,7 @@ void delete_array(Array *array) {
 void delete_cons(Cons *cons) {
   Cons *tail = cons->tail;
   DBGPRINT("delete cons %p\n", (void *)cons);
-  if (cons->cell_type == TYPE_VAL) delete_val(*((Val *)cons->head));
+  if (cons->cell_type == TYPE_REF) delete_ref(*((Ref *)cons->head));
   free(cons);
   while (tail) {
     tail->refs--;
@@ -443,7 +548,7 @@ void delete_cons(Cons *cons) {
     cons = tail;
     tail = tail->tail;
     DBGPRINT("delete cons %p\n", (void *)cons);
-    if (cons->cell_type == TYPE_VAL) delete_val(*((Val *)cons->head));
+    if (cons->cell_type == TYPE_REF) delete_ref(*((Ref *)cons->head));
     free(cons);
   }
 }
@@ -469,9 +574,9 @@ int main(int argc, char *argv[]) {
   sp = stack;
   bp = stack;
 
-  val_stack = calloc(stack_size, sizeof(Val));
-  vs = val_stack;
-  vb = val_stack;
+  ref_stack = calloc(stack_size, sizeof(Ref));
+  vs = ref_stack;
+  vb = ref_stack;
 
   pc = code;
 
@@ -480,25 +585,28 @@ int main(int argc, char *argv[]) {
   char *command = malloc(strlen(argv[0]) + strlen(argv[1]) + 2);
   strcpy(command, argv[0]);
   strcat(command, argv[1]);
-  Val args = create_array(argc - 1);
-  ((Val *)args.array->data)[0] = create_string(command);
+  Ref args = create_array(argc - 1);
+  ((Ref *)args.array->data)[0] = create_string(command);
   free(command);
   for (int i = 1; i < args.array->length; i++) {
-    ((Val *)args.array->data)[i] = create_string(argv[i + 1]);
+    ((Ref *)args.array->data)[i] = create_string(argv[i + 1]);
   }
   *(vs++) = args;
+  DBGPRINT("args loaded: ");
+  DBGPRINT_REF(*(vs - 1));
+  DBGPRINT("\n");
 
 ins_noop: EXECUTE_INS(*(pc++));
 ins_exit:
   DBGPRINT("exit\n");
   return 0;
 ins_pshn:
-  DBGPRINT("push: NIL to %ld\n", vs - val_stack);
+  DBGPRINT("push: NIL to %ld\n", vs - ref_stack);
   (vs++)->type = TYPE_NIL;
   EXECUTE_INS(*(pc++));
 ins_pshs:
   *vs = create_symbol((char *)pc);
-  DBGPRINT("push: %s to %ld\n", vs->symbol->symbol, vs - val_stack);
+  DBGPRINT("push: %s to %ld\n", vs->symbol->symbol, vs - ref_stack);
   pc += vs->symbol->length + 1;
   vs++;
   EXECUTE_INS(*(pc++));
@@ -510,10 +618,29 @@ ins_lod1: LOAD_INSTRUCTION(uint8_t);
 ins_lod2: LOAD_INSTRUCTION(uint16_t);
 ins_lod4: LOAD_INSTRUCTION(uint32_t);
 ins_lod8: LOAD_INSTRUCTION(uint64_t);
+ins_lodv:
+  ar = *((int16_t *)pc);
+  *vs = *(vb + ar);
+  copy_ref(*vs);
+  DBGPRINT("load: ");
+  DBGPRINT_REF(*vs);
+  DBGPRINT(" from %ld\n", vb - ref_stack + ar);
+  vs++;
+  pc += 2;
+  EXECUTE_INS(*(pc++));
 ins_sto1: STORE_INSTRUCTION(uint8_t);
 ins_sto2: STORE_INSTRUCTION(uint16_t);
 ins_sto4: STORE_INSTRUCTION(uint32_t);
 ins_sto8: STORE_INSTRUCTION(uint64_t);
+ins_stov:
+  ar = *((int16_t *)pc);
+  vs--;
+  delete_ref(*(vb + ar));
+  *(vb + ar) = *vs;
+  DBGPRINT("store: ");
+  DBGPRINT_REF(*vs);
+  DBGPRINT(" to %ld\n", vb - ref_stack + ar);
+  EXECUTE_INS(*(pc++));
 ins_opi1: INTEGER_OPERATORS(i1, int8_t, TYPE_I8);
 ins_opi2: INTEGER_OPERATORS(i2, int16_t, TYPE_I16);
 ins_opi4: INTEGER_OPERATORS(i4, int32_t, TYPE_I32);
@@ -527,10 +654,25 @@ ins_opf8: FLOAT_OPERATORS(f8, double, TYPE_F64);
 ins_opva:
   switch (*(pc++)) {
     case OPR_DUP:
-      copy_val(*(vs - 1));
+      copy_ref(*(vs - 1));
       *vs = *(vs - 1);
       vs++;
       EXECUTE_INS(*(pc++));
+    case OPR_AGT:
+      temp = *(vs - 1);
+      if (temp.type != TYPE_ARRAY) {
+        printf("get: type error");
+        return 1;
+      }
+      sp -= sizeof(uint64_t);
+      *(vs - 1) = ((Ref *)temp.array->data)[*((uint64_t *)sp)];
+      copy_ref(*(vs - 1));
+      DBGPRINT("get: ");
+      DBGPRINT_REF(*(vs - 1));
+      temp.array->refs--;
+      if (temp.array->refs < 1) delete_array(temp.array);
+      EXECUTE_INS(*(pc++));
+
   }
   EXECUTE_INS(*(pc++));
 ins_insp:
@@ -553,25 +695,70 @@ ins_jmpc:
 ins_call:
   sp -= sizeof(Address);
   ad = *((Address *)sp);
-  DBGPRINT("call %d (sp:%ld)\n", ad, sp - stack);
-  *((uint8_t **)sp) = bp;
-  bp = sp;
-  sp += sizeof(uint8_t *);
+  pas = *((uint8_t *)(pc++));
+  ras = *((uint8_t *)(pc++));
+  DBGPRINT("call %d (sp:%ld, pas:%d, ras:%d)\n", ad, sp - stack, pas, ras);
+  sp -= pas;
+  // move primitive parameters
+  memmove(sp + sizeof(char *) + sizeof(Ref *) + sizeof(uint8_t *), sp, pas);
+  // push return address
   *((char **)sp) = pc;
   sp += sizeof(char *);
   pc = code + ad;
+  // push reference base pointer
+  *((Ref **)sp) = vb;
+  sp += sizeof(Ref *);
+  vb = vs - ras;
+  // push primitive base pointer
+  *((uint8_t **)sp) = bp;
+  sp += sizeof(uint8_t *);
+  bp = sp;
+  sp += pas;
   dump_stack();
   EXECUTE_INS(*(pc++));
 
-ins_cret:
-  DBGPRINT("ret (bp:%ld, addr:%d)\n", bp - stack, *((int32_t *)pc));
+ins_retp:
   dump_stack();
-  sp = bp + *((int32_t *)pc);
+  pas = *((uint8_t *)(pc++));
+  DBGPRINT("ret (bp:%ld, pas:%d)\n", bp - stack, pas);
+  // restore pc
+  pc = *((char **)(bp - sizeof(uint8_t *) - sizeof(Ref *) - sizeof(char *)));
+  DBGPRINT("restore pc: %ld\n", pc - code);
+  temp_vb = *((Ref **)(bp - sizeof(uint8_t *) - sizeof(Ref *)));
+  temp_bp = *((uint8_t **)(bp - sizeof(uint8_t *)));
+  // move primitive return value
+  memmove(bp - sizeof(uint8_t *) - sizeof(Ref *) - sizeof(char *), sp - pas, pas);
+  sp = bp - sizeof(uint8_t *) - sizeof(Ref *) - sizeof(char *) + pas;
   DBGPRINT("restore sp: %ld\n", sp - stack);
   dump_stack();
-  pc = *((char **)(bp + sizeof(uint8_t *)));
+  while (vs > vb) {
+    delete_ref(*(vs--));
+  }
+  DBGPRINT("restore vs: %ld\n", vs - ref_stack);
+  vb = temp_vb;
+  bp = temp_bp;
+  EXECUTE_INS(*(pc++));
+
+ins_retr:
+  dump_stack();
+  DBGPRINT("ret (bp:%ld)\n", bp - stack);
+  // restore pc
+  pc = *((char **)(bp - sizeof(uint8_t *) - sizeof(Ref *) - sizeof(char *)));
   DBGPRINT("restore pc: %ld\n", pc - code);
-  bp = *((uint8_t **)bp);
+  // move primitive return value
+  temp_vb = vs - 1;
+  copy_ref(*temp_vb);
+  while (vs > vb) {
+    delete_ref(*(vs--));
+  }
+  sp = bp - sizeof(uint8_t *) - sizeof(Ref *) - sizeof(char *);
+  DBGPRINT("restore sp: %ld\n", sp - stack);
+  dump_stack();
+  vs = vb;
+  *(vs++) = *temp_vb;
+  DBGPRINT("restore vs: %ld\n", vs - ref_stack);
+  vb = *((Ref **)(bp - sizeof(uint8_t *) - sizeof(Ref *)));
+  bp = *((uint8_t **)(bp - sizeof(uint8_t *)));
   EXECUTE_INS(*(pc++));
 
 ins_sysc:

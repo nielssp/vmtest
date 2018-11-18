@@ -29,7 +29,8 @@
 #define INS_JUMP 25
 #define INS_JMPC 26
 #define INS_CALL 27
-#define INS_CRET 28
+#define INS_RETP 28
+#define INS_RETR 36
 #define INS_SYSC 29
 
 #define INS_PSHN 30
@@ -38,6 +39,7 @@
 #define INS_LODV 32
 #define INS_STOV 33
 #define INS_OPVA 34
+
 
 #define INS_FORK
 
@@ -70,6 +72,7 @@
 #define OPR_CU8 0x1A
 #define OPR_CF4 0x1B
 #define OPR_CF8 0x1C
+#define OPR_RET 0x1D
 
 #define OPR_SND
 #define OPR_RCV
