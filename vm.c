@@ -745,7 +745,7 @@ ins_retr:
   // restore pc
   pc = *((char **)(bp - sizeof(uint8_t *) - sizeof(Ref *) - sizeof(char *)));
   DBGPRINT("restore pc: %ld\n", pc - code);
-  // move primitive return value
+  // move reference return value
   temp_vb = vs - 1;
   copy_ref(*temp_vb);
   while (vs > vb) {
