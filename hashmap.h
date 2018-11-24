@@ -51,20 +51,20 @@
     delete_hash_map(map.map);\
   }\
   int name ## _add(type_name map, key_type key, value_type value) {\
-    return hash_map_add_generic(map.map, key, value);\
+    return hash_map_add_generic(map.map, (void *)key, (void *)value);\
   }\
   value_type name ## _remove(type_name map, const key_type key) {\
-    return (value_type)hash_map_remove_generic(map.map, key);\
+    return (value_type)hash_map_remove_generic(map.map, (void *)key);\
   }\
   value_type name ## _lookup(type_name map, const key_type key) {\
-    return (value_type)hash_map_lookup_generic(map.map, key);\
+    return (value_type)hash_map_lookup_generic(map.map, (void *)key);\
   }\
   type_name ## Entry name ## _remove_entry(type_name map, const key_type key) {\
-    HashMapEntry entry = hash_map_remove_generic_entry(map.map, key);\
+    HashMapEntry entry = hash_map_remove_generic_entry(map.map, (void *)key);\
     return (type_name ## Entry){.key = (key_type)entry.key, .value = (value_type)entry.value};\
   }\
   type_name ## Entry name ## _lookup_entry(type_name map, const key_type key) {\
-    HashMapEntry entry = hash_map_lookup_generic_entry(map.map, key);\
+    HashMapEntry entry = hash_map_lookup_generic_entry(map.map, (void *)key);\
     return (type_name ## Entry){.key = (key_type)entry.key, .value = (value_type)entry.value};\
   }\
   type_name ## Iterator create_ ## name ## _iterator(type_name map) {\
